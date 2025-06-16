@@ -59,7 +59,7 @@ Worker Nodes (Узлы-исполнители):
 # Создаем файл app.py
 Этот файл создает простое FastAPI-приложение, которое возвращает JSON-ответ при обращении к корневому пути.  
 
-`
+```
 from fastapi import FastAPI
 
 app = FastAPI()
@@ -67,20 +67,21 @@ app = FastAPI()
 @app.get("/")
 def root():
     return {"message": "Hello from FastAPI in Kubernetes!"}
-`
+```
+
 # requirements.txt
 
 Устанавливаем зависимости
 
-`
+```
 fastapi==0.109.1
 uvicorn==0.27.0
-`
+```
 Хорошей практикой будет прописывать версии, чтобы было легче отлаживать и откатываться при изменении.
 
 # Теперь необходимо написать Dockerfile
 
-`
+```
 
 FROM python:3.11-slim
 
@@ -92,7 +93,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-`
+```
 
 Здесь все также предельно понятно. Подтягиваем базовый образ python:3.11-slim из registry,берем облегченную версию, чтобы не утяжелять образ. Рабочей директорией выбираем заранее созданную /app. После копируем из нее все файлы в рабочую директрию контейнера. Устанавливаем зависимости с удалением кэша pip и запускаем unicorn сервер на 8000 порту. 
 
@@ -101,27 +102,34 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 Тут есть 2 варианта
 
 Первый - создаем докер образ как обычно:
+
 `
 docker build -t my-fastapi:0.109.1 .
 `
+
 А после загружаем его в minikube:
+
 `
 minikube image load my-fastapi:0.109.1
 `
+
 Второй - собрать образ сразу в среде minikube:
+
 `
 minikube image build -t my-fastapi:0.109.1 .
 `
 
 После проверяем попал ли образ в minikube:
+
 `
 minikube image ls #Покажет список образов в minikube
 `
+
 Теперь можно создавать yaml-манифесты, для описания жизненного цикла pod'ов. 
 
 # Deployment.yaml
 
-`
+```
 apiVersion: apps/v1  # Версия API Kubernetes для Deployment
 kind: Deployment     # Тип ресурса (развертывание)
 metadata:
@@ -141,7 +149,8 @@ spec:
         image: my-fastapi:latest  # Docker-образ 
         ports:
         - containerPort: 8000  # Порт, который слушает контейнер
-`
+```
+
 Deployment следит за состоянием подов:
 Прописываем порт, образ, имя, метку, а также количество подов, я взял 2.
 Если один под упадет — Deployment автоматически создаст новый.
@@ -150,7 +159,7 @@ Deployment следит за состоянием подов:
 
 # Теперь service.yaml
 
-`
+```
 apiVersion: v1          # Версия API Kubernetes для Service
 kind: Service           # Тип ресурса (сервис)
 metadata:
@@ -163,17 +172,18 @@ spec:
     - protocol: TCP     # Протокол передачи данных
       port: 80          # Порт, на котором сервис доступен внутри кластера
       targetPort: 8000  # Порт контейнера (должен совпадать с портом контейнера в Deployment)
-`
+```
 
 Этот манифест создает точку доступа к моим FastAPI-подам, балансирует нагрузку между всеми подами с меткой app: fastapi. Открывает порт 80 на нодах кластера внутри кластера, снаружи — через случайный порт в диапазоне 30000-32767.
 
 # Запуск
 
 Теперь все готово. Применяем манифесты:
-`
+
+```
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
-`
+```
 
 И смотрим поднялись ли наши pod'ы. 
 `
@@ -185,21 +195,25 @@ kubectl get pods
 (Скриншот был взят вообще с другой VM, но суть ошибки в общем то одинаковая)
 
 ErrImagePull - образ не был виден внутри minikube. После перепроверки загрузил все по новой и вроде бы решилось, но... новая ошибка
-`
+
+```
 NAME                                     READY   STATUS         RESTARTS   AGE
 my-fastapi-deployment-55d75666b6-427wz   0/1     ErrImagePull   0          64s
 my-fastapi-deployment-55d75666b6-bppsx   0/1     ErrImagePull   0          64s
-`
+```
+
 ImagePullBackOff и ErrImagePull - этот статус означает, что модуль не удалось запустить, поскольку он попытался получить образ контейнера из реестра с ошибкой. Модуль отказывается запускаться, потому что он не может создать один или несколько контейнеров, определенных в его манифесте.
 
 Я начал смотреть логи и describe pod'ов.
-`
+
+```
 kubectl describe pod pod-name
 kubectl logs pod-name
-`
+```
 
 Ничего дельного я там не нашел 
-`
+
+```
 Containers:
   fastapi:
     Container ID:   
@@ -211,11 +225,13 @@ Containers:
       Reason:       ErrImagePull
     Ready:          False
     Restart Count:  0
-`
+```
+
 Данное предупреждение меня сбило, ведь все разрешения были.
-`
+
+```
   Warning  Failed     23s (x4 over 117s)  kubelet            Failed to pull image "my-fastapi": Error response from daemon: pull access denied for my-fastapi, repository does not exist or may require 'docker login': denied: requested access to the resource is denied
-`
+```
 
 После долгих и упорных попыток пересоздания, загрузок образов по новой, чтения логов и гуглешки я решил сделать все заново и радикально пошел на вторую VM :))
 Там я сразу обнаружил, что для докера нет места на диске. Надо было расширить его. 
@@ -233,18 +249,21 @@ Containers:
 Я создавал файл, а не раздел подкачки. Так мне казалось проще:
 
 1. Проверяем текущий swap
-   `
+   
+   ``
 free -h
 sudo swapon --show
-   `
+   ``
+
 2. Cоздаем файл подкачки
    `sudo fallocate -l 2G /swapfile`
 3. Права, форматирование и активация
-   `sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
+   ```
+   sudo chmod 600 /swapfile
+   sudo mkswap /swapfile
    sudo swapon /swapfile
-   `
-4. Редактирование /etc/fstab
+   ```
+5. Редактирование /etc/fstab
    `echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab`
 
 Это было небольшое отступление. Я все таки установил docker. Что же по итогу? Все также ImagePullBackOff. Тут у меня сдали нервы и я ушел спать. На следующий день я ещё раз все перепроверил, почитал логи и после запуска тестового pod'а мне наконец-то выдало ошибку:
